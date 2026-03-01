@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
     LayoutDashboard,
     CheckSquare,
@@ -10,6 +10,7 @@ import {
     Settings,
     Activity,
     Zap,
+    LogOut,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -25,6 +26,17 @@ const navItems = [
 
 export default function Sidebar() {
     const pathname = usePathname();
+    const router = useRouter();
+
+    const handleLogout = async () => {
+        try {
+            await fetch("/api/auth", { method: "DELETE" });
+            router.push("/login");
+            router.refresh();
+        } catch (error) {
+            console.error("Logout failed:", error);
+        }
+    };
 
     return (
         <aside
@@ -141,29 +153,65 @@ export default function Sidebar() {
                 </nav>
             </div>
 
-            {/* XP Bar Bottom */}
+            {/* Bottom Section */}
             <div style={{ padding: "1.5rem", borderTop: "1px solid var(--border-color)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                    <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>Level 7 — Field Agent</span>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>2,450 XP</span>
-                </div>
-                <div
-                    style={{
-                        height: "8px",
-                        backgroundColor: "var(--bg-hover)",
-                        borderRadius: "var(--radius-full)",
-                        overflow: "hidden",
-                    }}
-                >
+                {/* XP Bar */}
+                <div style={{ marginBottom: "1rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+                        <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>Level 7 — Field Agent</span>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>2,450 XP</span>
+                    </div>
                     <div
                         style={{
-                            height: "100%",
-                            width: "70%",
-                            background: "linear-gradient(90deg, var(--brand-orange), var(--brand-blue))",
+                            height: "8px",
+                            backgroundColor: "var(--bg-hover)",
                             borderRadius: "var(--radius-full)",
+                            overflow: "hidden",
                         }}
-                    />
+                    >
+                        <div
+                            style={{
+                                height: "100%",
+                                width: "70%",
+                                background: "linear-gradient(90deg, var(--brand-orange), var(--brand-blue))",
+                                borderRadius: "var(--radius-full)",
+                            }}
+                        />
+                    </div>
                 </div>
+
+                {/* Logout Button */}
+                <button
+                    onClick={handleLogout}
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                        width: "100%",
+                        padding: "0.75rem 1rem",
+                        backgroundColor: "transparent",
+                        color: "var(--text-secondary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "var(--radius-md)",
+                        fontSize: "0.875rem",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        transition: "all 0.2s ease",
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
+                        e.currentTarget.style.borderColor = "#ef4444";
+                        e.currentTarget.style.color = "#ef4444";
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = "transparent";
+                        e.currentTarget.style.borderColor = "var(--border-color)";
+                        e.currentTarget.style.color = "var(--text-secondary)";
+                    }}
+                >
+                    <LogOut size={18} />
+                    Logout
+                </button>
             </div>
             <style dangerouslySetInnerHTML={{
                 __html: `

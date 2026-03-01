@@ -107,7 +107,7 @@ export default function Sidebar() {
                     <div>
                         <div style={{ fontSize: "0.875rem", fontWeight: 500 }}>Agent Online</div>
                         <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                            Claude Sonnet 3.5
+                            Zhipu AI GLM-4.5
                         </div>
                     </div>
                 </div>

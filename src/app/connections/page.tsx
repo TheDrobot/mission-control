@@ -6,7 +6,7 @@ import { Link2, X, Plus, Terminal, Youtube, MessageSquare, Twitter, Mail } from 
 // Mock data initially
 const API_CONNECTIONS = [
     { id: "zhipu", name: "Zhipu AI GLM-4.5", status: "active", icon: Terminal, isZapier: false },
-    { id: "railway", name: "Railway", status: "active", icon: Terminal, isZapier: false },
+    { id: "render", name: "Render", status: "active", icon: Terminal, isZapier: false },
     { id: "supabase", name: "Supabase Vector", status: "active", icon: Terminal, isZapier: false },
     { id: "youtube", name: "YouTube Analytics", status: "active", icon: Youtube, isZapier: true },
     { id: "discord", name: "Discord Bot", status: "inactive", icon: MessageSquare, isZapier: false },

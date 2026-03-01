@@ -1,397 +1,751 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Search, Code2, FileText, Lightbulb, FileBox, Image as ImageIcon, ChevronDown, ChevronUp, Loader2, Brain, User } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import {
+    Search, FolderPlus, Plus, FileText, Link as LinkIcon, Upload,
+    Folder, MoreVertical, Trash2, Edit3, X, Loader2, ChevronRight,
+    File, Image, ExternalLink, Download, Brain
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type ItemType = "All" | "Code" | "Text" | "Idea" | "PDF" | "Image" | "Fact";
-
-interface BrainMemory {
+// Types
+interface Folder {
     id: string;
-    content: string;
-    category: string;
-    source: "sqlite" | "pinecone";
-    timestamp: string;
+    name: string;
+    parent_id: string | null;
+    color: string;
+    icon: string;
+    created_at: string;
 }
 
-interface BrainEntity {
+interface BrainItem {
     id: string;
-    key: string;
-    value: string;
-    category: string;
-    confidence: number;
-    updated_at: string;
-}
-
-interface DisplayItem {
-    id: string;
-    type: ItemType;
+    folder_id: string | null;
+    type: 'text' | 'link' | 'document' | 'note' | 'image';
     title: string;
-    snippet: string;
-    content: string;
-    timestamp: string;
-    source?: string;
-    confidence?: number;
+    content: string | null;
+    file_url: string | null;
+    file_name: string | null;
+    file_size: number | null;
+    tags: string[];
+    created_at: string;
+    updated_at: string;
+    folder?: Folder;
 }
 
-// Map category to display type
-function categoryToType(category: string, isEntity: boolean): ItemType {
-    if (isEntity) return "Fact";
-
-    const cat = category.toLowerCase();
-    if (cat.includes("code") || cat.includes("snippet")) return "Code";
-    if (cat.includes("idea") || cat.includes("brainstorm")) return "Idea";
-    if (cat.includes("pdf") || cat.includes("document")) return "PDF";
-    if (cat.includes("image") || cat.includes("visual")) return "Image";
-    return "Text";
-}
+type AddModalType = 'text' | 'link' | 'note' | null;
 
 export default function SecondBrain() {
-    const [memories, setMemories] = useState<BrainMemory[]>([]);
-    const [entities, setEntities] = useState<BrainEntity[]>([]);
+    // State
+    const [folders, setFolders] = useState<Folder[]>([]);
+    const [items, setItems] = useState<BrainItem[]>([]);
+    const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState("");
-    const [activeFilter, setActiveFilter] = useState<ItemType>("All");
-    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [showAddModal, setShowAddModal] = useState<AddModalType>(null);
+    const [showNewFolder, setShowNewFolder] = useState(false);
+    const [newFolderName, setNewFolderName] = useState("");
+    const [newItemData, setNewItemData] = useState({ title: '', content: '', url: '' });
+    const [saving, setSaving] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const filters: { name: ItemType; icon: typeof Search }[] = [
-        { name: "All", icon: Search },
-        { name: "Fact", icon: User },
-        { name: "Code", icon: Code2 },
-        { name: "Text", icon: FileText },
-        { name: "Idea", icon: Lightbulb },
-        { name: "PDF", icon: FileBox },
-        { name: "Image", icon: ImageIcon },
-    ];
-
-    // Fetch data from Supabase
+    // Fetch data
     useEffect(() => {
-        fetchBrainData();
+        fetchFolders();
+        fetchItems();
 
-        // Subscribe to real-time changes
-        const channel = supabase
-            .channel("brain_changes")
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "brain_memories" },
-                () => fetchBrainData()
-            )
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "brain_entities" },
-                () => fetchBrainData()
-            )
+        // Real-time subscriptions
+        const foldersChannel = supabase.channel('folders-changes')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'brain_folders' }, () => fetchFolders())
+            .subscribe();
+
+        const itemsChannel = supabase.channel('items-changes')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'brain_items' }, () => fetchItems())
             .subscribe();
 
         return () => {
-            supabase.removeChannel(channel);
+            supabase.removeChannel(foldersChannel);
+            supabase.removeChannel(itemsChannel);
         };
     }, []);
 
-    const fetchBrainData = async () => {
+    const fetchFolders = async () => {
         try {
-            const [memoriesRes, entitiesRes] = await Promise.all([
-                supabase
-                    .from("brain_memories")
-                    .select("*")
-                    .order("timestamp", { ascending: false })
-                    .limit(100),
-                supabase
-                    .from("brain_entities")
-                    .select("*")
-                    .order("updated_at", { ascending: false })
-                    .limit(50),
-            ]);
-
-            if (memoriesRes.data) setMemories(memoriesRes.data);
-            if (entitiesRes.data) setEntities(entitiesRes.data);
+            const res = await fetch('/api/brain/folders');
+            const data = await res.json();
+            setFolders(data.folders || []);
         } catch (error) {
-            console.error("Failed to fetch brain data:", error);
+            console.error('Error fetching folders:', error);
+        }
+    };
+
+    const fetchItems = async () => {
+        setLoading(true);
+        try {
+            let url = '/api/brain/items';
+            if (selectedFolder) {
+                url += `?folder_id=${selectedFolder}`;
+            }
+            const res = await fetch(url);
+            const data = await res.json();
+            setItems(data.items || []);
+        } catch (error) {
+            console.error('Error fetching items:', error);
         } finally {
             setLoading(false);
         }
     };
 
-    // Combine memories and entities into display items
-    const displayItems: DisplayItem[] = [
-        ...memories.map((m) => ({
-            id: `memory-${m.id}`,
-            type: categoryToType(m.category, false) as ItemType,
-            title: m.content.slice(0, 50) + (m.content.length > 50 ? "..." : ""),
-            snippet: m.content.slice(0, 100) + (m.content.length > 100 ? "..." : ""),
-            content: m.content,
-            timestamp: m.timestamp,
-            source: m.source,
-        })),
-        ...entities.map((e) => ({
-            id: `entity-${e.id}`,
-            type: "Fact" as ItemType,
-            title: e.key,
-            snippet: e.value.slice(0, 80) + (e.value.length > 80 ? "..." : ""),
-            content: e.value,
-            timestamp: e.updated_at,
-            confidence: e.confidence,
-        })),
-    ];
+    useEffect(() => {
+        fetchItems();
+    }, [selectedFolder]);
 
-    // Sort by timestamp descending
-    displayItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    // Folder actions
+    const createFolder = async () => {
+        if (!newFolderName.trim()) return;
+        setSaving(true);
+        try {
+            await fetch('/api/brain/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newFolderName.trim() }),
+            });
+            setNewFolderName('');
+            setShowNewFolder(false);
+        } catch (error) {
+            console.error('Error creating folder:', error);
+        } finally {
+            setSaving(false);
+        }
+    };
 
-    const filteredItems = displayItems.filter((item) => {
-        const matchesFilter = activeFilter === "All" || item.type === activeFilter;
-        const matchesSearch =
-            item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            item.content.toLowerCase().includes(searchQuery.toLowerCase());
-        return matchesFilter && matchesSearch;
+    const deleteFolder = async (id: string) => {
+        if (!confirm('Eliminare questa cartella? Gli elementi verranno spostati nella root.')) return;
+        try {
+            await fetch(`/api/brain/folders?id=${id}`, { method: 'DELETE' });
+            if (selectedFolder === id) setSelectedFolder(null);
+        } catch (error) {
+            console.error('Error deleting folder:', error);
+        }
+    };
+
+    // Item actions
+    const createItem = async () => {
+        if (!newItemData.title.trim()) return;
+        setSaving(true);
+        try {
+            const body: Record<string, unknown> = {
+                type: showAddModal,
+                title: newItemData.title,
+                folder_id: selectedFolder,
+            };
+
+            if (showAddModal === 'link') {
+                body.content = newItemData.url;
+            } else {
+                body.content = newItemData.content;
+            }
+
+            await fetch('/api/brain/items', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+
+            setNewItemData({ title: '', content: '', url: '' });
+            setShowAddModal(null);
+        } catch (error) {
+            console.error('Error creating item:', error);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const deleteItem = async (id: string) => {
+        if (!confirm('Eliminare questo elemento?')) return;
+        try {
+            await fetch(`/api/brain/items?id=${id}`, { method: 'DELETE' });
+        } catch (error) {
+            console.error('Error deleting item:', error);
+        }
+    };
+
+    // File upload
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setSaving(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('title', file.name);
+            if (selectedFolder) {
+                formData.append('folder_id', selectedFolder);
+            }
+
+            await fetch('/api/brain/upload', {
+                method: 'POST',
+                body: formData,
+            });
+        } catch (error) {
+            console.error('Error uploading file:', error);
+        } finally {
+            setSaving(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    // Filter items
+    const filteredItems = items.filter(item => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        return item.title.toLowerCase().includes(q) ||
+               item.content?.toLowerCase().includes(q) ||
+               item.tags?.some(t => t.toLowerCase().includes(q));
     });
 
-    const getTypeColor = (type: ItemType) => {
+    // Helpers
+    const getTypeIcon = (type: string) => {
         switch (type) {
-            case "Idea": return "var(--brand-orange)";
-            case "Code": return "var(--brand-blue)";
-            case "Text": return "var(--text-primary)";
-            case "PDF": return "var(--brand-red)";
-            case "Image": return "var(--brand-green)";
-            case "Fact": return "var(--brand-purple, #a855f7)";
-            default: return "var(--text-muted)";
+            case 'link': return <LinkIcon size={16} />;
+            case 'document': return <File size={16} />;
+            case 'image': return <Image size={16} />;
+            case 'note': return <FileText size={16} />;
+            default: return <FileText size={16} />;
         }
     };
 
-    const getTypeIcon = (type: ItemType, color: string) => {
+    const getTypeColor = (type: string) => {
         switch (type) {
-            case "Idea": return <Lightbulb size={16} color={color} />;
-            case "Code": return <Code2 size={16} color={color} />;
-            case "Text": return <FileText size={16} color={color} />;
-            case "PDF": return <FileBox size={16} color={color} />;
-            case "Image": return <ImageIcon size={16} color={color} />;
-            case "Fact": return <User size={16} color={color} />;
-            default: return <Search size={16} color={color} />;
+            case 'link': return '#5a9cf5';
+            case 'document': return '#ef4444';
+            case 'image': return '#22c55e';
+            case 'note': return '#f59e0b';
+            default: return 'var(--text-secondary)';
         }
     };
 
-    const formatTimestamp = (timestamp: string) => {
-        try {
-            return new Date(timestamp).toLocaleString();
-        } catch {
-            return timestamp;
-        }
+    const formatBytes = (bytes: number | null) => {
+        if (!bytes) return '';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    };
+
+    const formatDate = (date: string) => {
+        return new Date(date).toLocaleDateString('it-IT', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric'
+        });
     };
 
     return (
-        <div className="flex-col gap-8" style={{ display: "flex", flex: 1, gap: "2rem", height: "100%" }}>
-            {/* Header & Search */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1.5rem", marginBottom: "1rem" }}>
-                <h1 style={{ fontSize: "2rem", fontWeight: 700 }}>Second Brain</h1>
-                <p className="text-secondary" style={{ fontSize: "1rem", textAlign: "center", maxWidth: "500px" }}>
-                    Your agent&apos;s memory bank. Search across all stored memories, facts, and knowledge.
-                </p>
-
-                <div style={{ position: "relative", width: "100%", maxWidth: "600px", marginTop: "1rem" }}>
-                    <div style={{ position: "absolute", left: "1rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}>
-                        <Search size={20} />
+        <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+            {/* Sidebar - Folders */}
+            <aside style={{
+                width: '260px',
+                backgroundColor: 'var(--bg-sidebar)',
+                borderRight: '1px solid var(--border-color)',
+                display: 'flex',
+                flexDirection: 'column',
+                flexShrink: 0,
+            }}>
+                {/* Sidebar Header */}
+                <div style={{
+                    padding: '1.5rem',
+                    borderBottom: '1px solid var(--border-color)',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                        <Brain size={24} color="var(--brand-orange)" />
+                        <h1 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Second Brain</h1>
                     </div>
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search memories, facts, and knowledge..."
-                        style={{
-                            width: "100%",
-                            padding: "1rem 1rem 1rem 3rem",
-                            backgroundColor: "var(--bg-elevated)",
-                            border: "1px solid var(--border-color)",
-                            borderRadius: "var(--radius-full)",
-                            color: "var(--text-primary)",
-                            fontSize: "1rem",
-                            outline: "none",
-                            transition: "all 0.2s ease",
-                            boxShadow: "0 4px 20px rgba(0,0,0,0.2)",
-                        }}
-                        onFocus={(e) => {
-                            e.currentTarget.style.borderColor = "var(--brand-blue)";
-                            e.currentTarget.style.boxShadow = "0 4px 24px rgba(90, 156, 245, 0.15)";
-                        }}
-                        onBlur={(e) => {
-                            e.currentTarget.style.borderColor = "var(--border-color)";
-                            e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.2)";
-                        }}
-                    />
+
+                    {/* Search */}
+                    <div style={{ position: 'relative' }}>
+                        <Search size={16} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                        <input
+                            type="text"
+                            placeholder="Cerca..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            style={{
+                                width: '100%',
+                                padding: '0.5rem 0.75rem 0.5rem 2.25rem',
+                                backgroundColor: 'var(--bg-elevated)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-md)',
+                                color: 'var(--text-primary)',
+                                fontSize: '0.875rem',
+                                outline: 'none',
+                            }}
+                        />
+                    </div>
                 </div>
 
-                {/* Type Selector Pills */}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
-                    {filters.map((f) => (
+                {/* Folders List */}
+                <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                            Cartelle
+                        </span>
                         <button
-                            key={f.name}
-                            onClick={() => setActiveFilter(f.name)}
+                            onClick={() => setShowNewFolder(true)}
                             style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "0.5rem",
-                                padding: "0.5rem 1rem",
-                                borderRadius: "var(--radius-full)",
-                                border: "1px solid",
-                                borderColor: activeFilter === f.name ? "var(--brand-orange)" : "var(--border-color)",
-                                backgroundColor: activeFilter === f.name ? "rgba(229, 133, 15, 0.1)" : "var(--bg-elevated)",
-                                color: activeFilter === f.name ? "var(--brand-orange)" : "var(--text-secondary)",
-                                fontSize: "0.875rem",
-                                fontWeight: 500,
-                                cursor: "pointer",
-                                transition: "all 0.2s ease",
-                            }}
-                            onMouseEnter={(e) => {
-                                if (activeFilter !== f.name) {
-                                    e.currentTarget.style.backgroundColor = "var(--bg-hover)";
-                                    e.currentTarget.style.color = "var(--text-primary)";
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                if (activeFilter !== f.name) {
-                                    e.currentTarget.style.backgroundColor = "var(--bg-elevated)";
-                                    e.currentTarget.style.color = "var(--text-secondary)";
-                                }
+                                padding: '0.25rem',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                color: 'var(--text-muted)',
+                                cursor: 'pointer',
                             }}
                         >
-                            <f.icon size={16} />
-                            {f.name}
+                            <FolderPlus size={16} />
                         </button>
+                    </div>
+
+                    {/* New Folder Input */}
+                    {showNewFolder && (
+                        <div style={{ marginBottom: '0.5rem' }}>
+                            <input
+                                type="text"
+                                placeholder="Nome cartella..."
+                                value={newFolderName}
+                                onChange={(e) => setNewFolderName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && createFolder()}
+                                autoFocus
+                                style={{
+                                    width: '100%',
+                                    padding: '0.5rem',
+                                    backgroundColor: 'var(--bg-elevated)',
+                                    border: '1px solid var(--brand-blue)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '0.875rem',
+                                    outline: 'none',
+                                }}
+                            />
+                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                <button onClick={createFolder} disabled={saving} style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', backgroundColor: 'var(--brand-blue)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+                                    Crea
+                                </button>
+                                <button onClick={() => { setShowNewFolder(false); setNewFolderName(''); }} style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', backgroundColor: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+                                    Annulla
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* All Items */}
+                    <button
+                        onClick={() => setSelectedFolder(null)}
+                        style={{
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            padding: '0.5rem 0.75rem',
+                            backgroundColor: selectedFolder === null ? 'var(--bg-elevated)' : 'transparent',
+                            border: 'none',
+                            borderRadius: 'var(--radius-sm)',
+                            color: selectedFolder === null ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            fontSize: '0.875rem',
+                            cursor: 'pointer',
+                            marginBottom: '0.25rem',
+                        }}
+                    >
+                        <FileText size={16} />
+                        Tutti gli elementi
+                        <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            {items.length}
+                        </span>
+                    </button>
+
+                    {/* Folders */}
+                    {folders.map((folder) => (
+                        <div
+                            key={folder.id}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                padding: '0.5rem 0.75rem',
+                                backgroundColor: selectedFolder === folder.id ? 'var(--bg-elevated)' : 'transparent',
+                                borderRadius: 'var(--radius-sm)',
+                                marginBottom: '0.25rem',
+                            }}
+                        >
+                            <button
+                                onClick={() => setSelectedFolder(folder.id)}
+                                style={{
+                                    flex: 1,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    backgroundColor: 'transparent',
+                                    border: 'none',
+                                    color: selectedFolder === folder.id ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                    fontSize: '0.875rem',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                }}
+                            >
+                                <Folder size={16} color={folder.color} />
+                                {folder.name}
+                            </button>
+                            <button
+                                onClick={() => deleteFolder(folder.id)}
+                                style={{
+                                    padding: '0.25rem',
+                                    backgroundColor: 'transparent',
+                                    border: 'none',
+                                    color: 'var(--text-muted)',
+                                    cursor: 'pointer',
+                                    opacity: 0.5,
+                                }}
+                            >
+                                <Trash2 size={14} />
+                            </button>
+                        </div>
                     ))}
                 </div>
 
-                {/* Stats */}
-                <div style={{ display: "flex", gap: "2rem", color: "var(--text-muted)", fontSize: "0.875rem" }}>
-                    <span><Brain size={14} style={{ marginRight: "0.5rem", verticalAlign: "middle" }} />{memories.length} memories</span>
-                    <span><User size={14} style={{ marginRight: "0.5rem", verticalAlign: "middle" }} />{entities.length} facts</span>
+                {/* Add Buttons */}
+                <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                    <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileUpload}
+                        style={{ display: 'none' }}
+                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
+                        <button
+                            onClick={() => setShowAddModal('note')}
+                            title="Nuova nota"
+                            style={{
+                                padding: '0.75rem',
+                                backgroundColor: 'var(--bg-elevated)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-sm)',
+                                color: 'var(--text-secondary)',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            <FileText size={18} />
+                        </button>
+                        <button
+                            onClick={() => setShowAddModal('link')}
+                            title="Nuovo link"
+                            style={{
+                                padding: '0.75rem',
+                                backgroundColor: 'var(--bg-elevated)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-sm)',
+                                color: 'var(--text-secondary)',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            <LinkIcon size={18} />
+                        </button>
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            title="Carica file"
+                            style={{
+                                padding: '0.75rem',
+                                backgroundColor: 'var(--bg-elevated)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-sm)',
+                                color: 'var(--text-secondary)',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            <Upload size={18} />
+                        </button>
+                        <button
+                            onClick={() => setShowAddModal('text')}
+                            title="Incolla testo"
+                            style={{
+                                padding: '0.75rem',
+                                backgroundColor: 'var(--bg-elevated)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-sm)',
+                                color: 'var(--text-secondary)',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            <Plus size={18} />
+                        </button>
+                    </div>
                 </div>
-            </div>
+            </aside>
 
-            {/* Loading State */}
-            {loading ? (
-                <div style={{ textAlign: "center", padding: "4rem 2rem" }}>
-                    <Loader2 size={32} style={{ animation: "spin 1s linear infinite", color: "var(--brand-orange)" }} />
-                    <p className="text-secondary" style={{ fontSize: "0.875rem", marginTop: "1rem" }}>Loading brain data...</p>
+            {/* Main Content */}
+            <main style={{ flex: 1, overflow: 'auto', padding: '2rem' }}>
+                {/* Header */}
+                <div style={{ marginBottom: '2rem' }}>
+                    <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.25rem' }}>
+                        {selectedFolder ? folders.find(f => f.id === selectedFolder)?.name : 'Tutti gli elementi'}
+                    </h2>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                        {filteredItems.length} elementi
+                    </p>
                 </div>
-            ) : (
-                /* Data Grid */
-                <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: "800px", margin: "0 auto", width: "100%" }}>
-                    {filteredItems.length === 0 ? (
-                        <div style={{ textAlign: "center", padding: "4rem 2rem", color: "var(--text-muted)" }}>
-                            <Search size={48} style={{ margin: "0 auto 1rem", opacity: 0.2 }} />
-                            <p>No memories found matching your query.</p>
-                            {memories.length === 0 && entities.length === 0 && (
-                                <p style={{ fontSize: "0.875rem", marginTop: "0.5rem" }}>
-                                    Start chatting with your agent to build your second brain!
-                                </p>
-                            )}
-                        </div>
-                    ) : (
-                        filteredItems.map((item) => {
-                            const isExpanded = expandedId === item.id;
-                            const typeColor = getTypeColor(item.type);
 
-                            return (
-                                <div
-                                    key={item.id}
-                                    onClick={() => setExpandedId(isExpanded ? null : item.id)}
-                                    style={{
-                                        backgroundColor: "var(--bg-card)",
-                                        border: "1px solid var(--border-color)",
-                                        borderRadius: "var(--radius-md)",
-                                        overflow: "hidden",
-                                        cursor: "pointer",
-                                        transition: "all 0.2s ease",
-                                    }}
-                                    onMouseEnter={(e) => {
-                                        if (!isExpanded) e.currentTarget.style.borderColor = "var(--border-hover)";
-                                    }}
-                                    onMouseLeave={(e) => {
-                                        if (!isExpanded) e.currentTarget.style.borderColor = "var(--border-color)";
-                                    }}
-                                >
-                                    {/* collapsed view */}
-                                    <div style={{ display: "flex", alignItems: "center", padding: "1.25rem", gap: "1rem" }}>
-                                        <div
-                                            style={{
-                                                width: "40px",
-                                                height: "40px",
-                                                borderRadius: "8px",
-                                                backgroundColor: "var(--bg-elevated)",
-                                                display: "flex",
-                                                alignItems: "center",
-                                                justifyContent: "center",
-                                                flexShrink: 0,
-                                            }}
-                                        >
-                                            {getTypeIcon(item.type, typeColor)}
-                                        </div>
-
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.25rem" }}>
-                                                <h3 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                                    {item.title}
-                                                </h3>
-                                                <span className="text-muted" style={{ fontSize: "0.75rem", flexShrink: 0, marginLeft: "1rem" }}>
-                                                    {formatTimestamp(item.timestamp)}
-                                                </span>
-                                            </div>
-                                            {!isExpanded && (
-                                                <p className="text-secondary" style={{ fontSize: "0.875rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                                    {item.snippet}
-                                                </p>
-                                            )}
-                                        </div>
-
-                                        <div style={{ color: "var(--text-muted)" }}>
-                                            {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                                        </div>
+                {/* Loading */}
+                {loading ? (
+                    <div style={{ textAlign: 'center', padding: '4rem' }}>
+                        <Loader2 size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--brand-orange)' }} />
+                    </div>
+                ) : filteredItems.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
+                        <FileText size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                        <p>Nessun elemento trovato</p>
+                        <p style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>Usa i pulsanti in basso a sinistra per aggiungere contenuto</p>
+                    </div>
+                ) : (
+                    /* Items Grid */
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
+                        {filteredItems.map((item) => (
+                            <div
+                                key={item.id}
+                                style={{
+                                    backgroundColor: 'var(--bg-card)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: 'var(--radius-md)',
+                                    overflow: 'hidden',
+                                }}
+                            >
+                                {/* Item Header */}
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '1rem',
+                                    gap: '0.75rem',
+                                    borderBottom: '1px solid var(--border-color)',
+                                }}>
+                                    <div style={{
+                                        width: '32px',
+                                        height: '32px',
+                                        borderRadius: '6px',
+                                        backgroundColor: `${getTypeColor(item.type)}20`,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: getTypeColor(item.type),
+                                    }}>
+                                        {getTypeIcon(item.type)}
                                     </div>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <h3 style={{
+                                            fontSize: '0.875rem',
+                                            fontWeight: 600,
+                                            whiteSpace: 'nowrap',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                        }}>
+                                            {item.title}
+                                        </h3>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            {formatDate(item.updated_at)}
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={() => deleteItem(item.id)}
+                                        style={{
+                                            padding: '0.25rem',
+                                            backgroundColor: 'transparent',
+                                            border: 'none',
+                                            color: 'var(--text-muted)',
+                                            cursor: 'pointer',
+                                            opacity: 0.5,
+                                        }}
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
 
-                                    {/* Expanded View */}
-                                    {isExpanded && (
-                                        <div
-                                            className="animate-fade-in"
+                                {/* Item Content */}
+                                <div style={{ padding: '1rem' }}>
+                                    {item.type === 'link' ? (
+                                        <a
+                                            href={item.content || '#'}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
                                             style={{
-                                                padding: "0 1.25rem 1.25rem 1.25rem",
-                                                borderTop: "1px solid var(--border-color)",
-                                                marginTop: "0.5rem",
-                                                paddingTop: "1.25rem",
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '0.5rem',
+                                                color: 'var(--brand-blue)',
+                                                fontSize: '0.875rem',
+                                                textDecoration: 'none',
+                                                wordBreak: 'break-all',
                                             }}
-                                            onClick={(e) => e.stopPropagation()}
                                         >
-                                            <div style={{
-                                                backgroundColor: "var(--bg-elevated)",
-                                                padding: "1rem",
-                                                borderRadius: "var(--radius-sm)",
-                                                border: "1px solid var(--border-color)",
-                                            }}>
-                                                <pre style={{
-                                                    margin: 0,
-                                                    whiteSpace: "pre-wrap",
-                                                    wordWrap: "break-word",
-                                                    fontFamily: item.type === "Code" ? "var(--font-geist-mono), monospace" : "inherit",
-                                                    fontSize: "0.875rem",
-                                                    color: "var(--text-primary)",
-                                                    lineHeight: 1.6,
-                                                }}>
-                                                    {item.content}
-                                                </pre>
-                                            </div>
-                                            {/* Metadata */}
-                                            <div style={{ display: "flex", gap: "1rem", marginTop: "0.75rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                                                {item.source && (
-                                                    <span>Source: {item.source}</span>
-                                                )}
-                                                {item.confidence !== undefined && (
-                                                    <span>Confidence: {(item.confidence * 100).toFixed(0)}%</span>
-                                                )}
-                                                <span>Type: {item.type}</span>
-                                            </div>
+                                            {item.content}
+                                            <ExternalLink size={14} />
+                                        </a>
+                                    ) : item.file_url ? (
+                                        <div>
+                                            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                                                {item.file_name}
+                                            </p>
+                                            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                                {formatBytes(item.file_size)}
+                                            </p>
+                                            <a
+                                                href={item.file_url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.25rem',
+                                                    marginTop: '0.5rem',
+                                                    fontSize: '0.75rem',
+                                                    color: 'var(--brand-blue)',
+                                                    textDecoration: 'none',
+                                                }}
+                                            >
+                                                <Download size={14} /> Scarica
+                                            </a>
                                         </div>
+                                    ) : (
+                                        <p style={{
+                                            fontSize: '0.875rem',
+                                            color: 'var(--text-secondary)',
+                                            lineHeight: 1.6,
+                                            display: '-webkit-box',
+                                            WebkitLineClamp: 3,
+                                            WebkitBoxOrient: 'vertical',
+                                            overflow: 'hidden',
+                                        }}>
+                                            {item.content}
+                                        </p>
                                     )}
                                 </div>
-                            );
-                        })
-                    )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </main>
+
+            {/* Add Modal */}
+            {showAddModal && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000,
+                }}>
+                    <div style={{
+                        backgroundColor: 'var(--bg-card)',
+                        borderRadius: 'var(--radius-lg)',
+                        padding: '1.5rem',
+                        width: '100%',
+                        maxWidth: '500px',
+                        maxHeight: '80vh',
+                        overflow: 'auto',
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                            <h3 style={{ fontSize: '1.125rem', fontWeight: 600 }}>
+                                {showAddModal === 'note' ? 'Nuova Nota' : showAddModal === 'link' ? 'Nuovo Link' : 'Incolla Testo'}
+                            </h3>
+                            <button onClick={() => setShowAddModal(null)} style={{ padding: '0.25rem', backgroundColor: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <input
+                                type="text"
+                                placeholder="Titolo"
+                                value={newItemData.title}
+                                onChange={(e) => setNewItemData({ ...newItemData, title: e.target.value })}
+                                style={{
+                                    width: '100%',
+                                    padding: '0.75rem',
+                                    backgroundColor: 'var(--bg-elevated)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: 'var(--radius-md)',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '0.875rem',
+                                    outline: 'none',
+                                }}
+                            />
+
+                            {showAddModal === 'link' ? (
+                                <input
+                                    type="url"
+                                    placeholder="https://..."
+                                    value={newItemData.url}
+                                    onChange={(e) => setNewItemData({ ...newItemData, url: e.target.value })}
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.75rem',
+                                        backgroundColor: 'var(--bg-elevated)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: 'var(--radius-md)',
+                                        color: 'var(--text-primary)',
+                                        fontSize: '0.875rem',
+                                        outline: 'none',
+                                    }}
+                                />
+                            ) : (
+                                <textarea
+                                    placeholder="Contenuto..."
+                                    value={newItemData.content}
+                                    onChange={(e) => setNewItemData({ ...newItemData, content: e.target.value })}
+                                    rows={6}
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.75rem',
+                                        backgroundColor: 'var(--bg-elevated)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: 'var(--radius-md)',
+                                        color: 'var(--text-primary)',
+                                        fontSize: '0.875rem',
+                                        outline: 'none',
+                                        resize: 'vertical',
+                                    }}
+                                />
+                            )}
+
+                            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                                <button
+                                    onClick={() => setShowAddModal(null)}
+                                    style={{
+                                        padding: '0.5rem 1rem',
+                                        backgroundColor: 'transparent',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: 'var(--radius-md)',
+                                        color: 'var(--text-secondary)',
+                                        fontSize: '0.875rem',
+                                        cursor: 'pointer',
+                                    }}
+                                >
+                                    Annulla
+                                </button>
+                                <button
+                                    onClick={createItem}
+                                    disabled={saving || !newItemData.title.trim()}
+                                    style={{
+                                        padding: '0.5rem 1rem',
+                                        backgroundColor: 'var(--brand-blue)',
+                                        border: 'none',
+                                        borderRadius: 'var(--radius-md)',
+                                        color: '#fff',
+                                        fontSize: '0.875rem',
+                                        cursor: saving || !newItemData.title.trim() ? 'default' : 'pointer',
+                                        opacity: !newItemData.title.trim() ? 0.5 : 1,
+                                    }}
+                                >
+                                    {saving ? 'Salvataggio...' : 'Salva'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -401,15 +755,8 @@ export default function SecondBrain() {
                         from { transform: rotate(0deg); }
                         to { transform: rotate(360deg); }
                     }
-                    .animate-fade-in {
-                        animation: fadeIn 0.2s ease;
-                    }
-                    @keyframes fadeIn {
-                        from { opacity: 0; transform: translateY(-10px); }
-                        to { opacity: 1; transform: translateY(0); }
-                    }
-                `}}
-            />
+                `
+            }} />
         </div>
     );
 }

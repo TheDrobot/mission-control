@@ -73,6 +73,9 @@ export default function SecondBrain() {
         try {
             const res = await fetch('/api/brain/folders');
             const data = await res.json();
+            if (!res.ok) {
+                console.error('Error fetching folders:', data.error);
+            }
             setFolders(data.folders || []);
         } catch (error) {
             console.error('Error fetching folders:', error);
@@ -105,15 +108,23 @@ export default function SecondBrain() {
         if (!newFolderName.trim()) return;
         setSaving(true);
         try {
-            await fetch('/api/brain/folders', {
+            const res = await fetch('/api/brain/folders', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: newFolderName.trim() }),
             });
-            setNewFolderName('');
-            setShowNewFolder(false);
+            const data = await res.json();
+            if (!res.ok) {
+                alert(`Errore: ${data.error || 'Errore sconosciuto'}`);
+                console.error('Server error:', data);
+            } else {
+                setNewFolderName('');
+                setShowNewFolder(false);
+                fetchFolders(); // Refresh list
+            }
         } catch (error) {
             console.error('Error creating folder:', error);
+            alert('Errore di connessione');
         } finally {
             setSaving(false);
         }
